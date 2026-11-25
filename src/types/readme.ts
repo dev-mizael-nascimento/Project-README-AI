@@ -1,3 +1,5 @@
+import type { Icon, IconProviders } from '@/types/icon';
+
 export type ClarificationQuestion = {
   id: string;
   question: string;
@@ -31,11 +33,29 @@ export type AnalysisResult = {
   questions: ClarificationQuestion[];
 };
 
+export type TechIconItem = {
+  name: string;
+  currentProvider: `${IconProviders}`;
+  variantIndex: number;
+  providers: Icon['providers'];
+  available_providers: Icon['available_providers'];
+};
+
+export type TechSectionData = {
+  heading: string;
+  align: 'left' | 'center' | 'right';
+  height: number;
+  spacing: number;
+  icons: TechIconItem[];
+};
+
 export type ReadmeSection = {
   id: string;
   title: string;
   markdown: string;
   enabled: boolean;
+  kind?: 'markdown' | 'techs';
+  techData?: TechSectionData;
 };
 
 export type GenerateResult = {

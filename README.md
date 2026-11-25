@@ -8,9 +8,14 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
 ![React](https://img.shields.io/badge/React-61DAFB?style=for-the-badge&logo=react&logoColor=black)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)
-![Gemini AI](https://img.shields.io/badge/Gemini_AI-8E75B2?style=for-the-badge&logo=googlegemini&logoColor=white)
+![AI Powered](https://img.shields.io/badge/AI_Powered-FF6D29?style=for-the-badge)
 ![Vitest](https://img.shields.io/badge/Vitest-6E9F18?style=for-the-badge&logo=vitest&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge)
+
+<br />
+<br />
+
+<img src="./docs/preview.png" alt="Preview do Project README AI" width="100%" />
 
 </div>
 
@@ -32,7 +37,7 @@ O **Project README AI** resolve isso em um fluxo guiado de 3 passos:
 ## ✨ Funcionalidades
 
 - 🔍 **Scanner inteligente de repositórios GitHub** com filtragem de ruído (`node_modules`, `.next`, `dist`, locks)
-- 🤖 **Análise com Gemini AI** com fallback automático entre modelos e preferência IPv4 para alta disponibilidade
+- 🤖 **Análise com AI** com fallback automático entre modelos e preferência IPv4 para alta disponibilidade
 - 🧠 **Modo Heurístico integrado** como fallback automático caso não haja chave de IA configurada
 - 🌐 **Geração bilíngue (`Português BR` e `English`)** com tradução completa de títulos, tabelas e comentários
 - 🎨 **Editor por seções + Preview GitHub ao vivo** (`react-markdown`, `remark-gfm`, `rehype-raw`)
@@ -55,7 +60,7 @@ src/
 │   └── readme-workbench.tsx      # Interface guiada em 3 etapas + editor e preview
 ├── lib/
 │   ├── ai/
-│   │   ├── client.ts             # Cliente Gemini com timeout, IPv4-first e fallback de modelos
+│   │   ├── client.ts             # Cliente AI com timeout, IPv4-first e fallback de modelos
 │   │   ├── analyzer.ts           # Análise de stack e geração de perguntas
 │   │   └── generator.ts          # Geração e melhoria visual do README.md
 │   ├── github/

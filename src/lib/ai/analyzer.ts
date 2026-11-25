@@ -209,3 +209,215 @@ ${scan.keyFiles.map((f) => `--- ${f.path} ---\n${f.content}`).join('\n\n')}
     return baseline;
   }
 }
+
+export type FreePromptResult =
+  | { kind: 'off_topic'; reply: string }
+  | { kind: 'readme_request'; scan: RepoScanSummary; analysis: AnalysisResult };
+
+/** Check whether a user input string is a GitHub URL or owner/repo slug. */
+export function isGitHubRepoInput(input: string): boolean {
+  const t = input.trim();
+  if (!t || /\s/.test(t)) return false;
+  if (/^https?:\/\/(www\.)?github\.com\/[^/]+\/[^/]+/i.test(t)) return true;
+  if (/^github\.com\/[^/]+\/[^/]+/i.test(t)) return true;
+  return /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(t);
+}
+
+/** Heuristic fallback for free-text prompt descriptions. */
+export function heuristicAnalyzeFreePrompt(
+  promptText: string,
+  outputLang: 'pt-BR' | 'en' = 'pt-BR',
+): FreePromptResult {
+  const lower = promptText.toLowerCase();
+  const isPt = outputLang === 'pt-BR';
+
+  const readmeKeywords = [
+    'readme',
+    'projeto',
+    'project',
+    'app',
+    'api',
+    'site',
+    'sistema',
+    'bot',
+    'cli',
+    'saas',
+    'next',
+    'react',
+    'node',
+    'python',
+    'typescript',
+    'javascript',
+    'docker',
+    'prisma',
+    'postgres',
+    'markdown',
+    '.md',
+    'documentar',
+    'documentação',
+    'repositório',
+    'github',
+  ];
+
+  const looksLikeProject = readmeKeywords.some((kw) => lower.includes(kw)) || promptText.length > 45;
+  if (!looksLikeProject) {
+    return {
+      kind: 'off_topic',
+      reply: isPt
+        ? 'Sou um assistente focado em criar e melhorar arquivos README.md para projetos de software. Me conte o que seu projeto faz (ou cole um link do GitHub / anexe um .md) que eu monto tudo no Studio visual para você!'
+        : 'I am an assistant focused on creating and improving README.md files for software projects. Describe what your project does (or paste a GitHub URL / attach a .md file) and I will build it in the visual Studio for you!',
+    };
+  }
+
+  const langs: string[] = [];
+  const frameworks: string[] = [];
+  const tools: string[] = [];
+  if (lower.includes('typescript') || lower.includes('ts')) langs.push('TypeScript');
+  if (lower.includes('javascript') || lower.includes('js')) langs.push('JavaScript');
+  if (lower.includes('python')) langs.push('Python');
+  if (lower.includes('next')) frameworks.push('Next.js');
+  if (lower.includes('react')) frameworks.push('React');
+  if (lower.includes('tailwind')) frameworks.push('TailwindCSS');
+  if (lower.includes('fastapi')) frameworks.push('FastAPI');
+  if (lower.includes('docker')) tools.push('Docker');
+  if (lower.includes('prisma')) tools.push('Prisma');
+  if (lower.includes('postgres')) tools.push('PostgreSQL');
+
+  const scan: RepoScanSummary = {
+    owner: 'prompt',
+    repo: 'meu-projeto',
+    url: 'https://github.com/owner/repo',
+    defaultBranch: 'main',
+    description: promptText.trim(),
+    homepage: null,
+    license: 'MIT',
+    topics: [],
+    tree: ['README.md'],
+    keyFiles: [{ path: 'PROMPT.txt', content: promptText.trim() }],
+  };
+
+  return {
+    kind: 'readme_request',
+    scan,
+    analysis: {
+      mode: 'heuristic',
+      projectName: isPt ? 'Meu Projeto' : 'My Project',
+      summary: promptText.trim(),
+      detectedLanguages: langs,
+      detectedFrameworks: frameworks,
+      detectedTools: tools,
+      detectedScripts: {},
+      detectedEnvVars: [],
+      missingInfo: [],
+      questions: [
+        {
+          id: 'env_vars',
+          question: isPt
+            ? 'O projeto usa variáveis de ambiente (.env) ou algum comando específico para rodar?'
+            : 'Does the project require any environment variables (.env) or specific run commands?',
+          placeholder: 'Ex.: DATABASE_URL, API_KEY / pnpm dev',
+        },
+        {
+          id: 'demo_url',
+          question: isPt
+            ? 'Tem algum link de demo, repositório ou nome específico para o título?'
+            : 'Do you have a live demo link, repo URL, or specific project title?',
+          placeholder: 'https://...',
+        },
+      ],
+    },
+  };
+}
+
+/** Analyze a free-text user prompt: classify intent, reply if off-topic, or prepare README generation. */
+export async function analyzeFreePrompt(
+  promptText: string,
+  outputLang: 'pt-BR' | 'en' = 'pt-BR',
+): Promise<FreePromptResult> {
+  const key = process.env.GEMINI_API_KEY?.trim();
+  const fallback = heuristicAnalyzeFreePrompt(promptText, outputLang);
+  if (!key) return fallback;
+
+  const targetLanguage = outputLang === 'en' ? 'English (en-US)' : 'Brazilian Portuguese (pt-BR)';
+
+  try {
+    const parsed = await generateJsonWithGemini<{
+      intent: 'readme_request' | 'off_topic';
+      offTopicReply?: string;
+      projectName?: string;
+      summary?: string;
+      detectedLanguages?: string[];
+      detectedFrameworks?: string[];
+      detectedTools?: string[];
+      detectedEnvVars?: string[];
+      questions?: ClarificationQuestion[];
+    }>(
+      key,
+      `
+You are the AI assistant inside "Project README AI", a tool exclusively for generating and improving GitHub README.md files.
+Evaluate the user's message below:
+"${promptText.replace(/"/g, '\\"')}"
+
+Return ONLY valid JSON:
+- If the message is NOT about creating, describing, or documenting a software project / README.md (for example: general trivia, cooking recipes, jokes, random chat, unrelated homework):
+  { "intent": "off_topic", "offTopicReply": "<polite, friendly 2-sentence reply in ${targetLanguage} explaining you specialize in creating README.md files and inviting them to describe their project, paste a GitHub link, or attach a .md file>" }
+- If the message describes a software project, app, library, or asks for a README.md:
+  {
+    "intent": "readme_request",
+    "projectName": string,
+    "summary": string (in ${targetLanguage}),
+    "detectedLanguages": string[],
+    "detectedFrameworks": string[],
+    "detectedTools": string[],
+    "detectedEnvVars": string[],
+    "questions": Array<{ "id": string, "question": string, "placeholder": string, "required": boolean }> (0 to 3 short questions in ${targetLanguage} only about missing details like repo name, env vars, or run commands)
+  }
+`,
+    );
+
+    if (parsed.intent === 'off_topic') {
+      return {
+        kind: 'off_topic',
+        reply:
+          parsed.offTopicReply ||
+          (outputLang === 'en'
+            ? 'I specialize in creating and improving README.md files. Describe your project, paste a GitHub URL, or attach a .md file to get started!'
+            : 'Sou especialista em criar e melhorar arquivos README.md! Descreva seu projeto, cole um link do GitHub ou anexe um arquivo .md para começarmos.'),
+      };
+    }
+
+    const projectName = parsed.projectName?.trim() || 'meu-projeto';
+    const scan: RepoScanSummary = {
+      owner: 'prompt',
+      repo: projectName,
+      url: 'https://github.com/owner/repo',
+      defaultBranch: 'main',
+      description: parsed.summary || promptText.trim(),
+      homepage: null,
+      license: 'MIT',
+      topics: [],
+      tree: ['README.md'],
+      keyFiles: [{ path: 'PROMPT.txt', content: promptText.trim() }],
+    };
+
+    return {
+      kind: 'readme_request',
+      scan,
+      analysis: {
+        mode: 'ai',
+        projectName,
+        summary: parsed.summary || promptText.trim(),
+        detectedLanguages: parsed.detectedLanguages || [],
+        detectedFrameworks: parsed.detectedFrameworks || [],
+        detectedTools: parsed.detectedTools || [],
+        detectedScripts: {},
+        detectedEnvVars: parsed.detectedEnvVars || [],
+        missingInfo: [],
+        questions: parsed.questions?.length ? parsed.questions : [],
+      },
+    };
+  } catch (err) {
+    console.warn('Gemini free-prompt analysis failed, falling back to heuristic:', err);
+    return fallback;
+  }
+}

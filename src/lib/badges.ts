@@ -1,61 +1,101 @@
-const BADGE_MAP: Record<string, { label: string; color: string; logo: string; logoColor?: string }> = {
-  typescript: { label: 'TypeScript', color: '3178C6', logo: 'typescript', logoColor: 'white' },
-  javascript: { label: 'JavaScript', color: 'F7DF1E', logo: 'javascript', logoColor: 'black' },
-  python: { label: 'Python', color: '3776AB', logo: 'python', logoColor: 'white' },
-  go: { label: 'Go', color: '00ADD8', logo: 'go', logoColor: 'white' },
-  rust: { label: 'Rust', color: '000000', logo: 'rust', logoColor: 'white' },
-  php: { label: 'PHP', color: '777BB4', logo: 'php', logoColor: 'white' },
-  java: { label: 'Java', color: 'ED8B00', logo: 'openjdk', logoColor: 'white' },
-  nextjs: { label: 'Next.js', color: '000000', logo: 'nextdotjs', logoColor: 'white' },
-  'next.js': { label: 'Next.js', color: '000000', logo: 'nextdotjs', logoColor: 'white' },
-  react: { label: 'React', color: '61DAFB', logo: 'react', logoColor: 'black' },
-  vue: { label: 'Vue.js', color: '4FC08D', logo: 'vuedotjs', logoColor: 'white' },
-  svelte: { label: 'Svelte', color: 'FF3E00', logo: 'svelte', logoColor: 'white' },
-  angular: { label: 'Angular', color: 'DD0031', logo: 'angular', logoColor: 'white' },
-  tailwindcss: { label: 'Tailwind_CSS', color: '06B6D4', logo: 'tailwindcss', logoColor: 'white' },
-  tailwind: { label: 'Tailwind_CSS', color: '06B6D4', logo: 'tailwindcss', logoColor: 'white' },
-  nodejs: { label: 'Node.js', color: '339933', logo: 'nodedotjs', logoColor: 'white' },
-  'node.js': { label: 'Node.js', color: '339933', logo: 'nodedotjs', logoColor: 'white' },
-  express: { label: 'Express', color: '000000', logo: 'express', logoColor: 'white' },
-  fastify: { label: 'Fastify', color: '000000', logo: 'fastify', logoColor: 'white' },
-  fastapi: { label: 'FastAPI', color: '009688', logo: 'fastapi', logoColor: 'white' },
-  django: { label: 'Django', color: '092E20', logo: 'django', logoColor: 'white' },
-  flask: { label: 'Flask', color: '000000', logo: 'flask', logoColor: 'white' },
-  prisma: { label: 'Prisma', color: '2D3748', logo: 'prisma', logoColor: 'white' },
-  drizzle: { label: 'Drizzle_ORM', color: 'C5F74F', logo: 'drizzle', logoColor: 'black' },
-  postgresql: { label: 'PostgreSQL', color: '4169E1', logo: 'postgresql', logoColor: 'white' },
-  mongodb: { label: 'MongoDB', color: '47A248', logo: 'mongodb', logoColor: 'white' },
-  redis: { label: 'Redis', color: 'FF4438', logo: 'redis', logoColor: 'white' },
-  docker: { label: 'Docker', color: '2496ED', logo: 'docker', logoColor: 'white' },
-  vitest: { label: 'Vitest', color: '6E9F18', logo: 'vitest', logoColor: 'white' },
-  playwright: { label: 'Playwright', color: '2EAD33', logo: 'playwright', logoColor: 'white' },
-  jest: { label: 'Jest', color: 'C21325', logo: 'jest', logoColor: 'white' },
-  pnpm: { label: 'pnpm', color: 'F69220', logo: 'pnpm', logoColor: 'black' },
-  bun: { label: 'Bun', color: '000000', logo: 'bun', logoColor: 'white' },
-  gemini: { label: 'Gemini_AI', color: '8E75B2', logo: 'googlegemini', logoColor: 'white' },
-};
+import { tech_icons } from '@/resources/tech_icons';
+import type { Icon, IconProviders } from '@/types/icon';
 
-/** Build Shields.io badge markdown for detected technologies. */
-export function buildTechBadgesMarkdown(techs: string[]): string {
+export type BadgeStyle = 'for-the-badge' | 'flat' | 'flat-square' | 'plastic';
+
+const norm = (s: string) => s.toLowerCase().replace(/[-_.\s]/g, '');
+
+/** Find a tech icon in the full catalog by name, shortname, or alias. */
+export function findTechIcon(query: string): Icon | undefined {
+  const n = norm(query);
+  return (tech_icons as Icon[]).find(
+    (item) =>
+      norm(item.name) === n ||
+      (item.shortname && norm(item.shortname) === n) ||
+      item.alias.some((a) => norm(a) === n),
+  );
+}
+
+/** Search tech icons in the catalog by query (name, alias, or tags). */
+export function searchTechIcons(query: string, limit = 36): Icon[] {
+  const q = query.trim().toLowerCase();
+  const list = tech_icons as Icon[];
+  if (!q) return list.slice(0, limit);
+
+  return list
+    .filter(
+      (item) =>
+        item.name.toLowerCase().includes(q) ||
+        item.shortname?.toLowerCase().includes(q) ||
+        item.alias.some((a) => a.toLowerCase().includes(q)) ||
+        item.tags.some((t) => t.toLowerCase().includes(q)),
+    )
+    .slice(0, limit);
+}
+
+/** Render a single tech icon as HTML <img> (matching profile-readme-generator) or Markdown badge. */
+export function renderTechIconSnippet(
+  icon: Icon,
+  provider: `${IconProviders}` = 'shields',
+  options?: { style?: BadgeStyle; height?: number },
+): string {
+  const chosenProvider = icon.providers[provider]
+    ? provider
+    : (icon.available_providers[0] as `${IconProviders}`);
+  const entry = icon.providers[chosenProvider];
+  if (!entry) return '';
+
+  let url = entry.path;
+  if (chosenProvider === 'shields' && options?.style) {
+    url = url.replace(/style=(for-the-badge|flat-square|flat|plastic)/, `style=${options.style}`);
+  }
+  url = url.replace(/ /g, '%20');
+
+  if (chosenProvider === 'shields') {
+    return `![${icon.name}](${url})`;
+  }
+
+  const height = options?.height ?? 40;
+  return `<img src="${url}" height="${height}" alt="${icon.name} logo" />`;
+}
+
+/** Build Shields.io badge markdown for detected technologies using the full catalog. */
+export function buildTechBadgesMarkdown(
+  techs: string[],
+  style: BadgeStyle = 'for-the-badge',
+): string {
   const seen = new Set<string>();
   const badges: string[] = [];
 
   for (const raw of techs) {
-    const key = raw.toLowerCase().trim();
-    if (seen.has(key)) continue;
+    const key = norm(raw);
+    if (!key || seen.has(key)) continue;
     seen.add(key);
 
-    const mapped = BADGE_MAP[key];
-    if (mapped) {
-      const logoColor = mapped.logoColor || 'white';
-      badges.push(
-        `![${raw}](https://img.shields.io/badge/${mapped.label}-${mapped.color}?style=for-the-badge&logo=${mapped.logo}&logoColor=${logoColor})`,
-      );
+    const icon = findTechIcon(raw);
+    if (icon?.providers.shields?.path) {
+      const url = icon.providers.shields.path
+        .replace(/style=(for-the-badge|flat-square|flat|plastic)/, `style=${style}`)
+        .replace(/ /g, '%20');
+      badges.push(`![${raw}](${url})`);
+    } else if (icon) {
+      const first = icon.providers[icon.available_providers[0]];
+      if (first?.path) {
+        badges.push(`<img src="${first.path}" height="32" alt="${raw} logo" />`);
+      }
     } else {
       const safeLabel = encodeURIComponent(raw.replace(/-/g, ' '));
-      badges.push(`![${raw}](https://img.shields.io/badge/${safeLabel}-27272A?style=for-the-badge)`);
+      badges.push(`![${raw}](https://img.shields.io/badge/${safeLabel}-27272A?style=${style})`);
     }
   }
 
   return badges.join(' ');
+}
+
+/** Update Shields.io badge style across an existing markdown snippet. */
+export function applyBadgeStyleToMarkdown(markdown: string, style: BadgeStyle): string {
+  return markdown.replace(
+    /(https:\/\/img\.shields\.io\/badge\/[^)\s]+style=)(for-the-badge|flat-square|flat|plastic)/g,
+    `$1${style}`,
+  );
 }

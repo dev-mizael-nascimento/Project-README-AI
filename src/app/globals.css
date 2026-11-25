@@ -109,4 +109,18 @@ body {
   display: inline-block;
   vertical-align: middle;
   margin: 2px 6px 2px 0;
+  max-height: 220px;
+  width: auto;
+}
+
+.markdown-body div[align="center"] {
+  text-align: center;
+}
+
+.markdown-body div[align="right"] {
+  text-align: right;
+}
+
+.markdown-body div[align="left"] {
+  text-align: left;
 }

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import './diagrams.css';
 
 export const metadata: Metadata = {
   title: 'Project README AI — Gerador Inteligente de README.md',

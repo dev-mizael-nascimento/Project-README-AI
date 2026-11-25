@@ -1,54 +1,57 @@
 'use client';
 
 import {
-  Check,
-  Code2,
-  Copy,
-  Download,
-  Eye,
+  ArrowUp,
+  ChevronRight,
   FileText,
-  Github,
   Loader2,
+  MessageSquareWarning,
+  Paperclip,
+  Pause,
+  Play,
   RotateCcw,
   Sparkles,
-  Wand2,
+  X,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import rehypeRaw from 'rehype-raw';
-import remarkGfm from 'remark-gfm';
-import type { AnalysisResult, ReadmeSection, RepoScanSummary } from '@/types/readme';
+import { useRef, useState } from 'react';
+import { ArchitectureSection } from '@/components/architecture-section';
+import { EdgeGlowBox } from '@/components/edge-glow-box';
+import { GridPulseBg } from '@/components/grid-pulse-bg';
+import { ReadmeStudio } from '@/components/readme-studio';
+import { ScanProgressModal } from '@/components/scan-progress-modal';
+import { isGitHubRepoInput } from '@/lib/input-detector';
+import { splitMarkdownIntoSections } from '@/lib/markdown-splitter';
+import { buildTechItemsFromNames, serializeTechSection } from '@/lib/tech-serializer';
+import type { AnalysisResult, ReadmeSection, RepoScanSummary, TechSectionData } from '@/types/readme';
 
 type Step = 'input' | 'questions' | 'editor';
 
 export function ReadmeWorkbench() {
   const [step, setStep] = useState<Step>('input');
+  const [inputMode, setInputMode] = useState<'github' | 'local'>('github');
   const [repoUrl, setRepoUrl] = useState('');
+  const [localMarkdown, setLocalMarkdown] = useState('');
+  const [localFileName, setLocalFileName] = useState('');
   const [outputLang, setOutputLang] = useState<'pt-BR' | 'en'>('pt-BR');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [offTopicReply, setOffTopicReply] = useState<string | null>(null);
 
   const [scan, setScan] = useState<RepoScanSummary | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
 
   const [sections, setSections] = useState<ReadmeSection[]>([]);
-  const [genMode, setGenMode] = useState<'ai' | 'heuristic'>('heuristic');
-  const [previewTab, setPreviewTab] = useState<'preview' | 'raw'>('preview');
-  const [copied, setCopied] = useState(false);
-
-  const fullMarkdown = useMemo(() => {
-    return sections
-      .filter((s) => s.enabled)
-      .map((s) => s.markdown.trim())
-      .filter(Boolean)
-      .join('\n\n');
-  }, [sections]);
+  const [genMode, setGenMode] = useState<'ai' | 'heuristic' | 'manual'>('heuristic');
+  const [glowPaused, setGlowPaused] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function handleScan(e: React.FormEvent) {
     e.preventDefault();
-    if (!repoUrl.trim()) return;
+    if (inputMode === 'github' && !repoUrl.trim()) return;
+    if (inputMode === 'local' && !localMarkdown.trim()) return;
 
     setLoading(true);
     setError(null);
@@ -56,16 +59,29 @@ export function ReadmeWorkbench() {
       const res = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          repoUrl: repoUrl.trim(),
-          outputLang,
-        }),
+        body: JSON.stringify(
+          inputMode === 'local'
+            ? {
+                localMarkdown,
+                fileName: localFileName || 'README.md',
+                outputLang,
+              }
+            : {
+                repoUrl: repoUrl.trim(),
+                outputLang,
+              },
+        ),
       });
       const data = (await res.json()) as {
         scan?: RepoScanSummary;
         analysis?: AnalysisResult;
+        offTopicReply?: string;
         error?: string;
       };
+      if (data.offTopicReply) {
+        setOffTopicReply(data.offTopicReply);
+        return;
+      }
       if (!res.ok || !data.scan || !data.analysis) {
         throw new Error(data.error || 'Falha ao escanear repositório.');
       }
@@ -105,7 +121,36 @@ export function ReadmeWorkbench() {
       if (!res.ok || !data.sections) {
         throw new Error(data.error || 'Falha ao gerar README.md.');
       }
-      setSections(data.sections);
+
+      const detectedTechs = [
+        ...analysis.detectedLanguages,
+        ...analysis.detectedFrameworks,
+        ...analysis.detectedTools,
+      ];
+      const techItems = buildTechItemsFromNames(detectedTechs, 'devicons');
+      const upgradedSections = data.sections.map((sec) => {
+        if (
+          techItems.length > 0 &&
+          (sec.id === 'tech_stack' || sec.id === 'stack' || /tech|tecnologia/i.test(sec.title))
+        ) {
+          const techData: TechSectionData = {
+            heading: outputLang === 'pt-BR' ? '## 🛠️ Tecnologias' : '## 🛠️ Tech Stack',
+            align: 'left',
+            height: 40,
+            spacing: 12,
+            icons: techItems,
+          };
+          return {
+            ...sec,
+            kind: 'techs' as const,
+            techData,
+            markdown: serializeTechSection(techData),
+          };
+        }
+        return sec;
+      });
+
+      setSections(upgradedSections);
       setGenMode(data.mode || 'heuristic');
       setStep('editor');
     } catch (err) {
@@ -115,20 +160,12 @@ export function ReadmeWorkbench() {
     }
   }
 
-  async function handleCopy() {
-    await navigator.clipboard.writeText(fullMarkdown);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
-
-  function handleDownload() {
-    const blob = new Blob([fullMarkdown], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'README.md';
-    a.click();
-    URL.revokeObjectURL(url);
+  function handleOpenDirectInStudio() {
+    if (!localMarkdown.trim()) return;
+    const parsed = splitMarkdownIntoSections(localMarkdown);
+    setSections(parsed);
+    setGenMode('manual');
+    setStep('editor');
   }
 
   function resetAll() {
@@ -140,356 +177,362 @@ export function ReadmeWorkbench() {
     setError(null);
   }
 
-  return (
-    <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-4 py-8 sm:px-6">
-      {/* Header */}
-      <header className="mb-8 flex flex-wrap items-center justify-between gap-4 border-b border-zinc-800 pb-6">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500/15 text-sky-400 ring-1 ring-sky-500/30">
-            <Sparkles className="h-5 w-5" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-zinc-100">Project README AI</h1>
-            <p className="text-sm text-zinc-400">
-              Lê o código do repositório, pergunta só o que falta e gera seu README.md
-            </p>
-          </div>
-        </div>
+  if (step === 'editor') {
+    return (
+      <ReadmeStudio
+        sections={sections}
+        onChangeSections={setSections}
+        outputLang={outputLang}
+        genMode={genMode}
+        onBackToQuestions={genMode === 'manual' ? undefined : () => setStep('questions')}
+        onReset={resetAll}
+      />
+    );
+  }
 
-        <div className="flex items-center gap-2">
+  return (
+    <div className="relative flex min-h-screen w-full flex-col text-white">
+      <GridPulseBg bg="#161316" ink="#BABABA" accent="#FF6D29" />
+
+      <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 py-6 sm:px-6">
+        {/* Discreet floating language / reset controls (no top bar) */}
+        <div className="mb-4 flex items-center justify-end gap-2">
           <select
             value={outputLang}
             onChange={(e) => setOutputLang(e.target.value as 'pt-BR' | 'en')}
-            className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 focus:border-sky-500 focus:outline-none"
+            className="rounded-full border border-white/15 bg-[#161316]/60 px-3 py-1 text-xs text-[#BABABA] backdrop-blur-md focus:border-[#FF6D29] focus:text-white focus:outline-none"
           >
-            <option value="pt-BR">Português (BR)</option>
-            <option value="en">English</option>
+            <option value="pt-BR">PT-BR</option>
+            <option value="en">EN</option>
           </select>
 
           {step !== 'input' && (
             <button
               type="button"
               onClick={resetAll}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-300 hover:border-zinc-700 hover:text-white"
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-[#161316]/60 px-3 py-1 text-xs text-[#BABABA] backdrop-blur-md transition hover:border-white/30 hover:text-white"
             >
-              <RotateCcw className="h-4 w-4" />
+              <RotateCcw className="h-3 w-3" />
               Novo projeto
             </button>
           )}
         </div>
-      </header>
 
-      {error && (
-        <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-          {error}
-        </div>
-      )}
-
-      {/* STEP 1: INPUT */}
-      {step === 'input' && (
-        <section className="mx-auto mt-6 w-full max-w-2xl rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 sm:p-8">
-          <div className="mb-6">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-500/10 px-3 py-1 text-xs font-medium text-sky-400 ring-1 ring-sky-500/20">
-              Passo 1 de 3
-            </span>
-            <h2 className="mt-3 text-2xl font-semibold text-zinc-100">
-              Qual repositório você quer documentar?
-            </h2>
-            <p className="mt-1 text-sm text-zinc-400">
-              Cole a URL de um repositório público do GitHub. Vamos ler a estrutura, scripts e
-              dependências automaticamente.
-            </p>
+        {error && (
+          <div className="mb-6 rounded-2xl border border-red-400/30 bg-red-500/15 px-4 py-3 text-sm text-red-200 backdrop-blur-md">
+            {error}
           </div>
+        )}
 
-          <form onSubmit={handleScan} className="space-y-4">
-            <div className="relative">
-              <Github className="pointer-events-none absolute top-3.5 left-3.5 h-5 w-5 text-zinc-500" />
-              <input
-                type="text"
-                value={repoUrl}
-                onChange={(e) => setRepoUrl(e.target.value)}
-                placeholder="https://github.com/owner/repo ou owner/repo"
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 py-3 pr-4 pl-11 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-sky-500 focus:outline-none"
-              />
-            </div>
+        {/* STEP 1: FX-HEADLINE + FX-PROMPT */}
+        {step === 'input' && (
+          <section className="mx-auto my-auto flex w-full max-w-[980px] flex-col items-center py-4">
+            {/* fx-headline */}
+            <div className="mb-10 flex flex-col items-center gap-5 text-center">
+              <a
+                href="https://github.com/dev-mizael-nascimento/Project-README-AI"
+                target="_blank"
+                rel="noreferrer"
+                className="group inline-flex h-8 items-center gap-2.5 rounded-full border border-white/15 bg-[#453027]/30 pr-3 pl-1 text-xs text-white backdrop-blur-xl transition hover:border-white/30 hover:bg-[#453027]/50"
+              >
+                <span className="inline-grid h-6 place-items-center rounded-full bg-[#FF6D29] px-2.5 text-[11px] font-semibold text-[#161316]">
+                  Open Source
+                </span>
+                <span className="text-[#BABABA] group-hover:text-white">
+                  Project README AI • Studio + AI
+                </span>
+                <ChevronRight className="h-3.5 w-3.5 text-[#BABABA] transition-transform group-hover:translate-x-0.5" />
+              </a>
 
-            <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
-              <span>Testar com:</span>
-              {[
-                'maurodesouza/profile-readme-generator',
-                'fastapi/fastapi',
-                'colinhacks/zod',
-              ].map((example) => (
-                <button
-                  key={example}
-                  type="button"
-                  onClick={() => setRepoUrl(`https://github.com/${example}`)}
-                  className="rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1 text-zinc-300 hover:border-zinc-700 hover:text-white"
-                >
-                  {example}
-                </button>
-              ))}
-            </div>
+              <h1 className="max-w-[15ch] text-[clamp(38px,5vw+10px,80px)] font-semibold leading-[1.02] tracking-[-0.035em] text-white">
+                Documente seu código com{' '}
+                <span className="bg-gradient-to-r from-[#FF6D29] via-[#ffb894] to-[#FF6D29] bg-clip-text text-transparent">
+                  precisão visual
+                </span>
+              </h1>
 
-            <button
-              type="submit"
-              disabled={loading || !repoUrl.trim()}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Escaneando repositório...
-                </>
-              ) : (
-                <>
-                  <Wand2 className="h-4 w-4" />
-                  Analisar projeto
-                </>
-              )}
-            </button>
-          </form>
-        </section>
-      )}
-
-      {/* STEP 2: ANALYSIS & QUESTIONS */}
-      {step === 'questions' && scan && analysis && (
-        <section className="grid gap-6 lg:grid-cols-5">
-          <div className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 lg:col-span-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium uppercase tracking-wider text-zinc-400">
-                Detectado no código
-              </span>
-              <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs text-zinc-300">
-                {analysis.mode === 'ai' ? 'Gemini AI' : 'Modo Heurístico'}
-              </span>
-            </div>
-
-            <div>
-              <h3 className="text-lg font-semibold text-zinc-100">
-                {scan.owner}/{scan.repo}
-              </h3>
-              <p className="mt-1 text-sm text-zinc-400">{analysis.summary}</p>
-            </div>
-
-            <div className="space-y-3 pt-2">
-              <TagGroup label="Linguagens" items={analysis.detectedLanguages} color="sky" />
-              <TagGroup label="Frameworks" items={analysis.detectedFrameworks} color="emerald" />
-              <TagGroup label="Ferramentas" items={analysis.detectedTools} color="violet" />
-              <TagGroup label="Env Vars" items={analysis.detectedEnvVars} color="amber" />
-            </div>
-
-            {Object.keys(analysis.detectedScripts).length > 0 && (
-              <div className="pt-2">
-                <p className="mb-1.5 text-xs font-medium text-zinc-400">Scripts encontrados</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {Object.keys(analysis.detectedScripts).map((script) => (
-                    <code
-                      key={script}
-                      className="rounded bg-zinc-950 px-2 py-0.5 text-xs text-zinc-300 ring-1 ring-zinc-800"
-                    >
-                      {script}
-                    </code>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <form
-            onSubmit={handleGenerate}
-            className="space-y-5 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 lg:col-span-3"
-          >
-            <div>
-              <span className="inline-flex items-center rounded-full bg-sky-500/10 px-3 py-1 text-xs font-medium text-sky-400 ring-1 ring-sky-500/20">
-                Passo 2 de 3
-              </span>
-              <h2 className="mt-2 text-xl font-semibold text-zinc-100">
-                Complete o que não está explícito no código
-              </h2>
-              <p className="text-sm text-zinc-400">
-                Responda apenas o que fizer sentido — você pode deixar em branco e editar depois.
+              <p className="max-w-[46ch] text-base leading-relaxed text-[#BABABA]">
+                A IA lê seu repositório, pergunta só o que não está explícito e entrega tudo
+                pronto no Studio interativo.
               </p>
             </div>
 
-            <div className="space-y-4">
-              {analysis.questions.map((q) => (
-                <div key={q.id}>
-                  <label className="mb-1.5 block text-sm font-medium text-zinc-200">
-                    {q.question}
-                  </label>
+            <form onSubmit={handleScan} className="w-full max-w-[600px] space-y-6">
+              <EdgeGlowBox accent="#FF6D29" inset={18} radius={22} paused={glowPaused}>
+                <div className="p-4">
+                  {inputMode === 'local' && localFileName ? (
+                    <div className="mb-2 flex items-center justify-between rounded-xl border border-white/10 bg-[#161316]/60 px-3 py-2 text-xs">
+                      <span className="flex items-center gap-2 text-white">
+                        <FileText className="h-4 w-4 text-[#FF6D29]" />
+                        {localFileName} ({localMarkdown.length} chars)
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleOpenDirectInStudio}
+                          className="rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-white/25"
+                        >
+                          Abrir direto no Studio
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setInputMode('github');
+                            setLocalFileName('');
+                            setLocalMarkdown('');
+                          }}
+                          className="text-[#BABABA] hover:text-white"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
                   <textarea
+                    ref={inputRef}
                     rows={2}
-                    value={answers[q.id] || ''}
-                    onChange={(e) =>
-                      setAnswers((prev) => ({
-                        ...prev,
-                        [q.id]: e.target.value,
-                      }))
-                    }
-                    placeholder={q.placeholder}
-                    className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-sky-500 focus:outline-none"
+                    value={repoUrl}
+                    onChange={(e) => {
+                      setInputMode('github');
+                      setRepoUrl(e.target.value);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        e.currentTarget.form?.requestSubmit();
+                      }
+                    }}
+                    placeholder="Cole um link do GitHub, descreva seu projeto ou anexe um .md..."
+                    className="block min-h-[52px] w-full resize-none border-0 bg-transparent text-sm leading-relaxed text-white caret-[#FF6D29] placeholder:text-[#BABABA]/60 focus:outline-none"
                   />
+
+                  <div className="mt-3 flex items-center gap-2">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".md,.markdown,.txt"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const text = await file.text();
+                        setLocalFileName(file.name);
+                        setLocalMarkdown(text);
+                        setInputMode('local');
+                      }}
+                    />
+                    <button
+                      type="button"
+                      title="Anexar arquivo .md local"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="grid h-8 w-8 place-items-center rounded-lg border border-white/15 text-[#BABABA] transition hover:border-white/30 hover:text-white"
+                    >
+                      <Paperclip className="h-4 w-4" />
+                    </button>
+
+                    <span className="inline-flex h-8 items-center gap-2 rounded-lg border border-white/15 px-3 text-xs text-white">
+                      <span className="h-1.5 w-1.5 rounded-full bg-[#FF6D29]" />
+                      {inputMode === 'local'
+                        ? 'Markdown Local'
+                        : isGitHubRepoInput(repoUrl)
+                          ? 'GitHub + AI'
+                          : 'Prompt Livre + AI'}
+                    </span>
+
+                    <button
+                      type="submit"
+                      disabled={
+                        loading ||
+                        (inputMode === 'github' ? !repoUrl.trim() : !localMarkdown.trim())
+                      }
+                      title={inputMode === 'local' ? 'Melhorar com IA' : 'Analisar projeto'}
+                      className="ml-auto grid h-8 w-8 place-items-center rounded-full bg-[#FF6D29] text-[#161316] shadow-md shadow-[#FF6D29]/30 transition hover:bg-[#ff8147] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {loading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <ArrowUp className="h-4 w-4 stroke-[2.2]" />
+                      )}
+                    </button>
+                  </div>
                 </div>
-              ))}
+              </EdgeGlowBox>
+
+              {/* Pause/Resume edge-glow toggle */}
+              <div className="flex justify-end px-2">
+                <button
+                  type="button"
+                  onClick={() => setGlowPaused((v) => !v)}
+                  title={glowPaused ? 'Retomar luz na borda' : 'Pausar luz na borda'}
+                  className="grid h-7 w-7 place-items-center rounded-full border border-white/15 bg-[#161316]/50 text-[#BABABA] transition hover:text-white"
+                >
+                  {glowPaused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+                </button>
+              </div>
+            </form>
+          </section>
+        )}
+
+        {/* STEP 2: GLASS ANALYSIS & QUESTIONS */}
+        {step === 'questions' && scan && analysis && (
+          <section className="my-auto grid gap-6 lg:grid-cols-5">
+            <div className="space-y-4 rounded-3xl border border-white/15 bg-[#453027]/25 p-6 backdrop-blur-2xl lg:col-span-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium uppercase tracking-wider text-[#BABABA]">
+                  Detectado no código
+                </span>
+                <span className="rounded-full border border-[#FF6D29]/40 bg-[#FF6D29]/15 px-2.5 py-0.5 text-xs text-[#FF6D29]">
+                  {analysis.mode === 'ai' ? 'AI' : 'Modo Heurístico'}
+                </span>
+              </div>
+
+              <div>
+                <h3 className="text-lg font-semibold text-white">
+                  {scan.owner}/{scan.repo}
+                </h3>
+                <p className="mt-1 text-sm text-[#BABABA]">{analysis.summary}</p>
+              </div>
+
+              <div className="space-y-3 pt-2">
+                <TagGroup label="Linguagens" items={analysis.detectedLanguages} color="orange" />
+                <TagGroup label="Frameworks" items={analysis.detectedFrameworks} color="emerald" />
+                <TagGroup label="Ferramentas" items={analysis.detectedTools} color="silver" />
+                <TagGroup label="Env Vars" items={analysis.detectedEnvVars} color="amber" />
+              </div>
+
+              {Object.keys(analysis.detectedScripts).length > 0 && (
+                <div className="pt-2">
+                  <p className="mb-1.5 text-xs font-medium text-[#BABABA]">Scripts encontrados</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.keys(analysis.detectedScripts).map((script) => (
+                      <code
+                        key={script}
+                        className="rounded-full border border-white/10 bg-[#161316]/70 px-2.5 py-0.5 text-xs text-white"
+                      >
+                        {script}
+                      </code>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-sky-400 disabled:opacity-50"
+            <form
+              onSubmit={handleGenerate}
+              className="space-y-5 rounded-3xl border border-white/15 bg-[#453027]/25 p-6 backdrop-blur-2xl lg:col-span-3"
             >
-              {loading ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Gerando README.md...
-                </>
-              ) : (
-                <>
-                  <FileText className="h-4 w-4" />
-                  Gerar README.md
-                </>
-              )}
-            </button>
-          </form>
-        </section>
-      )}
+              <div>
+                <span className="inline-flex items-center rounded-full border border-[#FF6D29]/40 bg-[#FF6D29]/15 px-3 py-1 text-xs font-medium text-[#FF6D29]">
+                  Passo 2 de 3
+                </span>
+                <h2 className="mt-2 text-xl font-semibold text-white">
+                  Complete o que não está explícito no código
+                </h2>
+                <p className="text-sm text-[#BABABA]">
+                  Responda apenas o que fizer sentido — você pode deixar em branco e editar depois.
+                </p>
+              </div>
 
-      {/* STEP 3: EDITOR & PREVIEW */}
-      {step === 'editor' && (
-        <section className="grid gap-6 lg:grid-cols-2">
-          {/* Left: Sections Editor */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-zinc-100">
-                Seções geradas ({genMode === 'ai' ? 'Gemini AI' : 'Modo Heurístico'})
-              </h2>
+              <div className="space-y-4">
+                {analysis.questions.map((q) => (
+                  <div key={q.id}>
+                    <label className="mb-1.5 block text-sm font-medium text-white">
+                      {q.question}
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={answers[q.id] || ''}
+                      onChange={(e) =>
+                        setAnswers((prev) => ({
+                          ...prev,
+                          [q.id]: e.target.value,
+                        }))
+                      }
+                      placeholder={q.placeholder}
+                      className="w-full rounded-2xl border border-white/15 bg-[#161316]/70 px-4 py-2.5 text-sm text-white placeholder:text-[#BABABA]/50 focus:border-[#FF6D29] focus:outline-none"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#FF6D29] px-6 py-3 text-sm font-semibold text-[#161316] shadow-lg shadow-[#FF6D29]/20 transition hover:bg-[#ff8147] disabled:opacity-50"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Gerando README.md...
+                  </>
+                ) : (
+                  <>
+                    <FileText className="h-4 w-4" />
+                    Gerar e abrir no Studio
+                  </>
+                )}
+              </button>
+            </form>
+          </section>
+        )}
+      </div>
+
+      {step === 'input' && <ArchitectureSection />}
+
+      {/* Glass Progress Popup after Step 1 */}
+      <ScanProgressModal
+        open={loading && step === 'input'}
+        mode={
+          inputMode === 'local'
+            ? 'local'
+            : isGitHubRepoInput(repoUrl)
+              ? 'github'
+              : 'prompt'
+        }
+      />
+
+      {/* Glass Popup for Off-Topic AI Message */}
+      {offTopicReply && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          onClick={() => setOffTopicReply(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl border border-white/15 bg-[#453027]/40 p-6 shadow-2xl backdrop-blur-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[#FF6D29]">
+                <Sparkles className="h-4 w-4" />
+                Assistente Project README AI
+              </span>
               <button
                 type="button"
-                onClick={() => setStep('questions')}
-                className="text-xs text-sky-400 hover:underline"
+                onClick={() => setOffTopicReply(null)}
+                className="rounded-full p-1 text-[#BABABA] hover:bg-white/10 hover:text-white"
               >
-                Voltar às perguntas
+                <X className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="space-y-3">
-              {sections.map((section, idx) => (
-                <div
-                  key={section.id}
-                  className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4"
-                >
-                  <div className="mb-2 flex items-center justify-between">
-                    <label className="flex items-center gap-2 text-sm font-medium text-zinc-200">
-                      <input
-                        type="checkbox"
-                        checked={section.enabled}
-                        onChange={(e) =>
-                          setSections((prev) =>
-                            prev.map((s, i) =>
-                              i === idx ? { ...s, enabled: e.target.checked } : s,
-                            ),
-                          )
-                        }
-                        className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 accent-sky-500"
-                      />
-                      {section.title}
-                    </label>
-                  </div>
-
-                  {section.enabled && (
-                    <textarea
-                      rows={5}
-                      value={section.markdown}
-                      onChange={(e) =>
-                        setSections((prev) =>
-                          prev.map((s, i) =>
-                            i === idx ? { ...s, markdown: e.target.value } : s,
-                          ),
-                        )
-                      }
-                      className="w-full rounded-lg border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs text-zinc-200 focus:border-sky-500 focus:outline-none"
-                    />
-                  )}
-                </div>
-              ))}
+            <div className="mb-5 flex gap-3">
+              <MessageSquareWarning className="mt-0.5 h-5 w-5 shrink-0 text-[#FF6D29]" />
+              <p className="text-sm leading-relaxed text-white">{offTopicReply}</p>
             </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setOffTopicReply(null);
+                inputRef.current?.focus();
+              }}
+              className="w-full rounded-full bg-[#FF6D29] py-2.5 text-xs font-semibold text-[#161316] transition hover:bg-[#ff8147]"
+            >
+              Entendi, voltar ao prompt
+            </button>
           </div>
-
-          {/* Right: Live Preview & Export */}
-          <div className="flex flex-col rounded-2xl border border-zinc-800 bg-zinc-900/50">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 px-4 py-3">
-              <div className="flex items-center gap-1 rounded-lg bg-zinc-950 p-1">
-                <button
-                  type="button"
-                  onClick={() => setPreviewTab('preview')}
-                  className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium ${
-                    previewTab === 'preview'
-                      ? 'bg-zinc-800 text-white'
-                      : 'text-zinc-400 hover:text-zinc-200'
-                  }`}
-                >
-                  <Eye className="h-3.5 w-3.5" />
-                  Preview
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPreviewTab('raw')}
-                  className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium ${
-                    previewTab === 'raw'
-                      ? 'bg-zinc-800 text-white'
-                      : 'text-zinc-400 hover:text-zinc-200'
-                  }`}
-                >
-                  <Code2 className="h-3.5 w-3.5" />
-                  Markdown
-                </button>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleCopy}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-700"
-                >
-                  {copied ? (
-                    <>
-                      <Check className="h-3.5 w-3.5 text-emerald-400" />
-                      Copiado!
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-3.5 w-3.5" />
-                      Copiar
-                    </>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleDownload}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500 px-3 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-sky-400"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Baixar README.md
-                </button>
-              </div>
-            </div>
-
-            <div className="max-h-[75vh] overflow-y-auto p-6">
-              {previewTab === 'preview' ? (
-                <article className="markdown-body">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
-                    {fullMarkdown}
-                  </ReactMarkdown>
-                </article>
-              ) : (
-                <pre className="whitespace-pre-wrap font-mono text-xs text-zinc-300">
-                  {fullMarkdown}
-                </pre>
-              )}
-            </div>
-          </div>
-        </section>
+        </div>
       )}
     </div>
   );
@@ -502,24 +545,24 @@ function TagGroup({
 }: {
   label: string;
   items: string[];
-  color: 'sky' | 'emerald' | 'violet' | 'amber';
+  color: 'orange' | 'emerald' | 'silver' | 'amber';
 }) {
   if (items.length === 0) return null;
   const styles = {
-    sky: 'bg-sky-500/10 text-sky-300 ring-sky-500/20',
-    emerald: 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/20',
-    violet: 'bg-violet-500/10 text-violet-300 ring-violet-500/20',
-    amber: 'bg-amber-500/10 text-amber-300 ring-amber-500/20',
+    orange: 'border-[#FF6D29]/30 bg-[#FF6D29]/15 text-[#FF6D29]',
+    emerald: 'border-emerald-400/30 bg-emerald-500/15 text-emerald-300',
+    silver: 'border-white/15 bg-white/10 text-white',
+    amber: 'border-amber-400/30 bg-amber-500/15 text-amber-200',
   }[color];
 
   return (
     <div>
-      <p className="mb-1.5 text-xs font-medium text-zinc-400">{label}</p>
+      <p className="mb-1.5 text-xs font-medium text-[#BABABA]">{label}</p>
       <div className="flex flex-wrap gap-1.5">
         {items.map((item) => (
           <span
             key={item}
-            className={`rounded-md px-2 py-0.5 text-xs font-medium ring-1 ${styles}`}
+            className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${styles}`}
           >
             {item}
           </span>
