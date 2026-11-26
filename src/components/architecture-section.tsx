@@ -99,7 +99,7 @@ function FreeDiagram({ item }: { item: DiagramCardConfig }) {
   useEffect(() => {
     const el = dgRef.current;
     if (!el) return;
-    const instance = dg.mount(el, item.spec, { iconBase: '/icons/' });
+    const instance = dg.mount(el, item.spec, { iconBase: '/icons/', controls: false });
     return () => {
       instance?.destroy?.();
     };
