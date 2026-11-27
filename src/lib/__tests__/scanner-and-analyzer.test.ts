@@ -12,7 +12,7 @@ import {
   renderTechIconSnippet,
   searchTechIcons,
 } from '@/lib/badges';
-import { parseGitHubUrl } from '@/lib/github/scanner';
+import { detectRepoLogoUrl, parseGitHubUrl } from '@/lib/github/scanner';
 import { splitMarkdownIntoSections } from '@/lib/markdown-splitter';
 import { STUDIO_BLOCK_PRESETS } from '@/lib/studio-blocks';
 import { buildTechItemsFromNames, serializeTechSection } from '@/lib/tech-serializer';
@@ -32,6 +32,21 @@ describe('parseGitHubUrl', () => {
 
   it('throws on invalid non-GitHub URL', () => {
     expect(() => parseGitHubUrl('https://gitlab.com/foo/bar')).toThrow();
+  });
+
+  it('detects repository logo image and encodes spaces in raw GitHub URL', () => {
+    const logo = detectRepoLogoUrl(
+      [
+        'docs/preview.png',
+        'RB Psicanalise - Sistema de Fichas/04_Identidade_Visual/Logotipo minimalista de Psicanálise.png',
+      ],
+      'dev-mizael-nascimento',
+      'RB-Psican-lise',
+      'main',
+    );
+    expect(logo).toBe(
+      'https://raw.githubusercontent.com/dev-mizael-nascimento/RB-Psican-lise/main/RB%20Psicanalise%20-%20Sistema%20de%20Fichas/04_Identidade_Visual/Logotipo%20minimalista%20de%20Psican%C3%A1lise.png',
+    );
   });
 });
 
@@ -62,6 +77,48 @@ describe('heuristicAnalyze and generateReadme', () => {
       },
     ],
   };
+
+  it('detects languages and .env.example inside subfolders (e.g. Flask web app)', () => {
+    const nestedScan: RepoScanSummary = {
+      owner: 'dev-mizael-nascimento',
+      repo: 'RB-Psican-lise',
+      url: 'https://github.com/dev-mizael-nascimento/RB-Psican-lise',
+      defaultBranch: 'main',
+      description: null,
+      homepage: null,
+      license: null,
+      topics: [],
+      languages: { Python: 52000, HTML: 31000, CSS: 12000, JavaScript: 8400 },
+      tree: [
+        '.github/workflows/build-windows-exe.yml',
+        'RB_Psicanalise_Web/app.py',
+        'RB_Psicanalise_Web/requirements.txt',
+        'RB_Psicanalise_Web/.env.example',
+        'RB_Psicanalise_Web/templates/index.html',
+        'RB_Psicanalise_Web/static/style.css',
+        'RB_Psicanalise_Web/static/main.js',
+      ],
+      keyFiles: [
+        {
+          path: 'RB_Psicanalise_Web/requirements.txt',
+          content: 'Flask==3.0.0\nSQLAlchemy==2.0.0',
+        },
+        {
+          path: 'RB_Psicanalise_Web/.env.example',
+          content: 'FLASK_ENV=development\nSECRET_KEY=changeme\nDATABASE_URL=sqlite:///rb_psicanalise.db',
+        },
+      ],
+    };
+
+    const analysis = heuristicAnalyze(nestedScan, 'pt-BR');
+    expect(analysis.detectedLanguages).toEqual(
+      expect.arrayContaining(['Python', 'HTML', 'CSS', 'JavaScript']),
+    );
+    expect(analysis.detectedFrameworks).toContain('Flask');
+    expect(analysis.detectedTools).toEqual(expect.arrayContaining(['SQLite', 'SQLAlchemy', 'GitHub Actions']));
+    expect(analysis.detectedEnvVars).toEqual(['FLASK_ENV', 'SECRET_KEY', 'DATABASE_URL']);
+    expect(analysis.questions.some((q) => q.id === 'env_vars')).toBe(false);
+  });
 
   it('detects stack, scripts, env vars and generates targeted questions', () => {
     const analysis = heuristicAnalyze(mockScan, 'pt-BR');

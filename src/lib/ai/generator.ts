@@ -23,9 +23,9 @@ function buildHeuristicSections(
 
   const installCmd = analysis.detectedTools.includes('pnpm')
     ? 'pnpm install'
-    : scan.keyFiles.some((f) => f.path === 'package.json')
+    : scan.keyFiles.some((f) => (f.path.split('/').pop() ?? f.path) === 'package.json')
       ? 'npm install'
-      : scan.keyFiles.some((f) => f.path === 'requirements.txt')
+      : scan.keyFiles.some((f) => (f.path.split('/').pop() ?? f.path) === 'requirements.txt')
         ? 'pip install -r requirements.txt'
         : '# Configure dependencies for your stack';
 
@@ -35,12 +35,16 @@ function buildHeuristicSections(
       ? `${analysis.detectedTools.includes('pnpm') ? 'pnpm' : 'npm run'} start`
       : '# Start the application';
 
+  const logoBlock = scan.logoUrl
+    ? `<div align="center">\n  <img src="${scan.logoUrl}" alt="${analysis.projectName} logo" width="160" />\n</div>\n\n`
+    : '';
+
   const sections: ReadmeSection[] = [
     {
       id: 'header',
       title: isPt ? 'Cabeçalho & Badges' : 'Header & Badges',
       enabled: true,
-      markdown: `# ${analysis.projectName}\n\n${badgesMarkdown ? `${badgesMarkdown}\n\n` : ''}${goal}${demoUrl ? `\n\n🔗 **Demo:** [${demoUrl}](${demoUrl})` : ''}`,
+      markdown: `${logoBlock}# ${analysis.projectName}\n\n${badgesMarkdown ? `${badgesMarkdown}\n\n` : ''}${goal}${demoUrl ? `\n\n🔗 **Demo:** [${demoUrl}](${demoUrl})` : ''}`,
     },
     {
       id: 'features',
@@ -161,7 +165,7 @@ Rules:
         : 'No existing README.md was found. Create a complete, visually polished README from scratch.'
     }
 - Make the visual layout clean and professional (like top open-source GitHub repositories):
-  1. "header": Clean title (\`# ...\`), concise tagline, the provided \`badgesMarkdown\` on one line, and demo/repo links if available.
+  1. "header": ${scan.logoUrl ? `Start with \`<div align="center"><img src="${scan.logoUrl}" alt="${analysis.projectName} logo" width="160" /></div>\`, then ` : ''}Clean title (\`# ...\`), concise tagline, the provided \`badgesMarkdown\` on one line, and demo/repo links if available.
   2. "features": \`## ✨ ...\` bullet list of concrete capabilities found in the code + user answers.
   3. "tech_stack": \`## 🛠️ ...\` clean summary or table of the detected stack.
   4. "structure": \`## 📁 ...\` compact ASCII folder tree highlighting the main directories from \`scan.tree\`.
@@ -172,6 +176,7 @@ Rules:
 - Do NOT invent commands, features, or environment variables that are not in the scan, existing README, or user answers.
 
 Repository: ${scan.url} (license: ${scan.license || 'unspecified'})
+Detected Logo URL: ${scan.logoUrl || 'None'}
 Badges: ${badgesMarkdown}
 Tree sample: ${scan.tree.slice(0, 60).join(', ')}
 Analysis: ${JSON.stringify(analysis)}

@@ -1,6 +1,27 @@
 import { generateJsonWithGemini } from '@/lib/ai/client';
 import type { AnalysisResult, ClarificationQuestion, RepoScanSummary } from '@/types/readme';
 
+const baseName = (filePath: string) => filePath.split('/').pop() ?? filePath;
+
+function mergeUnique(primary: string[] | undefined, fallback: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of [...(primary || []), ...fallback]) {
+    const clean = item.trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(clean);
+  }
+  return result;
+}
+
+const GITHUB_LANGUAGE_MAP: Record<string, string> = {
+  Batchfile: 'Batch',
+  Shell: 'Shell',
+};
+
 /** Heuristic fallback analyzer that works without an AI key. */
 export function heuristicAnalyze(scan: RepoScanSummary, outputLang: 'pt-BR' | 'en' = 'pt-BR'): AnalysisResult {
   const languages = new Set<string>();
@@ -9,20 +30,38 @@ export function heuristicAnalyze(scan: RepoScanSummary, outputLang: 'pt-BR' | 'e
   let detectedScripts: Record<string, string> = {};
   const detectedEnvVars = new Set<string>();
 
-  for (const p of scan.tree) {
-    if (p.endsWith('.ts') || p.endsWith('.tsx')) languages.add('TypeScript');
-    else if (p.endsWith('.js') || p.endsWith('.jsx') || p.endsWith('.mjs')) languages.add('JavaScript');
-    else if (p.endsWith('.py')) languages.add('Python');
-    else if (p.endsWith('.go')) languages.add('Go');
-    else if (p.endsWith('.rs')) languages.add('Rust');
-    else if (p.endsWith('.php')) languages.add('PHP');
-    else if (p.endsWith('.java')) languages.add('Java');
-
-    if (p.includes('Dockerfile') || p.includes('docker-compose')) tools.add('Docker');
+  if (scan.languages) {
+    for (const lang of Object.keys(scan.languages)) {
+      languages.add(GITHUB_LANGUAGE_MAP[lang] || lang);
+    }
   }
 
-  const pkgFile = scan.keyFiles.find((f) => f.path === 'package.json');
-  if (pkgFile) {
+  for (const p of scan.tree) {
+    const lower = p.toLowerCase();
+    if (lower.endsWith('.ts') || lower.endsWith('.tsx')) languages.add('TypeScript');
+    else if (lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.mjs') || lower.endsWith('.cjs')) languages.add('JavaScript');
+    else if (lower.endsWith('.py')) languages.add('Python');
+    else if (lower.endsWith('.html') || lower.endsWith('.htm')) languages.add('HTML');
+    else if (lower.endsWith('.css')) languages.add('CSS');
+    else if (lower.endsWith('.scss') || lower.endsWith('.sass')) languages.add('Sass');
+    else if (lower.endsWith('.go')) languages.add('Go');
+    else if (lower.endsWith('.rs')) languages.add('Rust');
+    else if (lower.endsWith('.php')) languages.add('PHP');
+    else if (lower.endsWith('.java')) languages.add('Java');
+    else if (lower.endsWith('.rb')) languages.add('Ruby');
+    else if (lower.endsWith('.cs')) languages.add('C#');
+    else if (lower.endsWith('.vue')) frameworks.add('Vue');
+    else if (lower.endsWith('.svelte')) frameworks.add('Svelte');
+    else if (lower.endsWith('.sql')) languages.add('SQL');
+    else if (lower.endsWith('.db') || lower.endsWith('.sqlite') || lower.endsWith('.sqlite3')) tools.add('SQLite');
+    else if (lower.endsWith('.sh')) languages.add('Shell');
+
+    if (lower.includes('dockerfile') || lower.includes('docker-compose')) tools.add('Docker');
+    if (lower.includes('.github/workflows/')) tools.add('GitHub Actions');
+  }
+
+  const pkgFiles = scan.keyFiles.filter((f) => baseName(f.path) === 'package.json');
+  for (const pkgFile of pkgFiles) {
     try {
       const pkg = JSON.parse(pkgFile.content) as {
         scripts?: Record<string, string>;
@@ -30,7 +69,7 @@ export function heuristicAnalyze(scan: RepoScanSummary, outputLang: 'pt-BR' | 'e
         devDependencies?: Record<string, string>;
         packageManager?: string;
       };
-      detectedScripts = pkg.scripts || {};
+      detectedScripts = { ...detectedScripts, ...(pkg.scripts || {}) };
       const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
 
       if (allDeps.next) frameworks.add('Next.js');
@@ -51,17 +90,36 @@ export function heuristicAnalyze(scan: RepoScanSummary, outputLang: 'pt-BR' | 'e
     }
   }
 
-  const pyFile = scan.keyFiles.find((f) => f.path === 'pyproject.toml' || f.path === 'requirements.txt');
-  if (pyFile) {
+  const pyFiles = scan.keyFiles.filter((f) => {
+    const b = baseName(f.path);
+    return b === 'pyproject.toml' || b === 'requirements.txt' || b === 'Pipfile';
+  });
+  for (const pyFile of pyFiles) {
     languages.add('Python');
     const lower = pyFile.content.toLowerCase();
     if (lower.includes('fastapi')) frameworks.add('FastAPI');
     if (lower.includes('django')) frameworks.add('Django');
     if (lower.includes('flask')) frameworks.add('Flask');
+    if (lower.includes('sqlalchemy')) tools.add('SQLAlchemy');
+    if (lower.includes('jinja2')) tools.add('Jinja2');
+    if (lower.includes('pyinstaller')) tools.add('PyInstaller');
+    if (lower.includes('pytest')) tools.add('pytest');
   }
 
-  const envFile = scan.keyFiles.find((f) => f.path.startsWith('.env.'));
-  if (envFile) {
+  for (const f of scan.keyFiles) {
+    const lower = f.content.toLowerCase();
+    if (lower.includes('sqlite')) tools.add('SQLite');
+    if (lower.includes('postgres')) tools.add('PostgreSQL');
+    if (lower.includes('mysql')) tools.add('MySQL');
+    if (lower.includes('redis')) tools.add('Redis');
+    if (lower.includes('bootstrap')) frameworks.add('Bootstrap');
+  }
+
+  const envFiles = scan.keyFiles.filter((f) => {
+    const b = baseName(f.path).toLowerCase();
+    return b.startsWith('.env.') && !b.endsWith('.local');
+  });
+  for (const envFile of envFiles) {
     for (const line of envFile.content.split('\n')) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#')) continue;
@@ -184,25 +242,31 @@ Description: ${scan.description || 'None'}
 Homepage: ${scan.homepage || 'None'}
 Topics: ${scan.topics.join(', ') || 'None'}
 License: ${scan.license || 'None'}
+Languages (GitHub API): ${scan.languages ? Object.keys(scan.languages).join(', ') || 'None' : 'Unknown'}
 Tree (sample):
-${scan.tree.slice(0, 150).join('\n')}
+${scan.tree.slice(0, 300).join('\n')}
 
 Key Files & Source Entrypoints:
 ${scan.keyFiles.map((f) => `--- ${f.path} ---\n${f.content}`).join('\n\n')}
 `;
 
     const parsed = await generateJsonWithGemini<Omit<AnalysisResult, 'mode'>>(key, prompt);
+    const mergedEnvVars = mergeUnique(parsed.detectedEnvVars, baseline.detectedEnvVars);
+    const filteredQuestions = (parsed.questions?.length ? parsed.questions : baseline.questions).filter(
+      (q) => !(mergedEnvVars.length > 0 && q.id === 'env_vars'),
+    );
+
     return {
       mode: 'ai',
       projectName: parsed.projectName || baseline.projectName,
       summary: parsed.summary || baseline.summary,
-      detectedLanguages: parsed.detectedLanguages?.length ? parsed.detectedLanguages : baseline.detectedLanguages,
-      detectedFrameworks: parsed.detectedFrameworks?.length ? parsed.detectedFrameworks : baseline.detectedFrameworks,
-      detectedTools: parsed.detectedTools?.length ? parsed.detectedTools : baseline.detectedTools,
-      detectedScripts: parsed.detectedScripts || baseline.detectedScripts,
-      detectedEnvVars: parsed.detectedEnvVars?.length ? parsed.detectedEnvVars : baseline.detectedEnvVars,
+      detectedLanguages: mergeUnique(parsed.detectedLanguages, baseline.detectedLanguages),
+      detectedFrameworks: mergeUnique(parsed.detectedFrameworks, baseline.detectedFrameworks),
+      detectedTools: mergeUnique(parsed.detectedTools, baseline.detectedTools),
+      detectedScripts: { ...baseline.detectedScripts, ...(parsed.detectedScripts || {}) },
+      detectedEnvVars: mergedEnvVars,
       missingInfo: parsed.missingInfo || [],
-      questions: parsed.questions?.length ? parsed.questions : baseline.questions,
+      questions: filteredQuestions,
     };
   } catch (err) {
     console.warn('Gemini analysis failed, falling back to heuristic mode:', err);

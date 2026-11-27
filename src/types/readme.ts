@@ -16,6 +16,8 @@ export type RepoScanSummary = {
   homepage: string | null;
   license: string | null;
   topics: string[];
+  logoUrl?: string | null;
+  languages?: Record<string, number>;
   tree: string[];
   keyFiles: Array<{ path: string; content: string }>;
 };
